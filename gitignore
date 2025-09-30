@@ -1,0 +1,28 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+
+# JetBrains IDE files (e.g. PyCharm, IntelliJ IDEA)
+.idea/
+
+# Virtual environments
+env/
+venv/
+.env
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# macOS Finder metadata
+.DS_Store
+
+# Temporary and log files
+*.log
+*.tmp
+
+# Generated output (reports, previews)
+report_*.pdf
+preview_*.png
+
+# Node modules or compiled dependencies
+node_modules/
