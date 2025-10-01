@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 import matplotlib
+
 matplotlib.use('Agg')  # ensure non‑interactive backend
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -95,6 +96,34 @@ class ReportConfig:
     # for the recommended maximum length per line.
     small_lines_start: float = 0.03
     small_lines_reserved: float = 0.20
+
+    # Spacing around major sections of the report.  These constants are
+    # expressed as fractions of the page height and can be overridden via
+    # the optional configuration file.  Adjusting them allows you to
+    # fine‑tune the distances between header, title, subheading, the
+    # activities list and the signature.
+    body_gap: float = 0.02  # vertical space between the header and the report title
+    subheading_gap: float = 0.06  # vertical space between the title and the red subheading
+    list_gap: float = 0.08  # vertical space between the subheading and the start of the list
+    signature_min_height: float = 0.07  # minimum space required to draw the signature block
+    signature_offset: float = 0.05  # offset from the last list line to the first signature line
+    signature_line_gap: float = 0.03  # gap between the two lines of the signature
+
+    # Compensation factor applied to the logo's height when computing its
+    # aspect ratio.  Values less than 1.0 will effectively reduce the
+    # perceived height of the logo, making it wider.  Use this if your
+    # logo appears too narrow.  Default is 1.0 (no compensation).
+    logo_height_compensation: float = 1.0
+
+    # Horizontal margin for text and logo positions (fraction of page width).
+    # This value determines how far from the left edge the text begins and
+    # how far from the right edge the logo ends.  Adjust via config if
+    # your report needs wider margins.
+    content_margin: float = 0.06
+
+    # Additional horizontal indent for subitems in the activity list.  This
+    # value is added to ``content_margin`` for each level of indentation.
+    sub_indent: float = 0.02
 
     @staticmethod
     def load(path: str) -> 'ReportConfig':
@@ -209,14 +238,15 @@ class ReportGenerator:
         # on the first and subsequent pages.  This ensures consistent vertical density across all pages.
         header_top1 = 1.0 - cfg.top_margin
         header_bottom1 = header_top1 - cfg.header_height
-        body_top1 = header_bottom1 - 0.02
-        sub_y1 = body_top1 - 0.06
-        y_start_first = sub_y1 - 0.08
+        # Calculate available height on the first page using configured gaps
+        body_top1 = header_bottom1 - cfg.body_gap
+        sub_y1 = body_top1 - cfg.subheading_gap
+        y_start_first = sub_y1 - cfg.list_gap
         available_first = y_start_first - cfg.bottom_margin
         # Small header for pages beyond the first
         header_height_small = cfg.header_height * cfg.small_header_factor
         header_bottom_small = header_top1 - header_height_small
-        y_start_other = header_bottom_small - 0.02
+        y_start_other = header_bottom_small - cfg.body_gap
         available_other = y_start_other - cfg.bottom_margin
         # Determine minimum available height and compute lines per page
         # Use the smallest available vertical space across the first and
@@ -260,7 +290,7 @@ class ReportGenerator:
                         spacing_frac = reserved_frac_small / n
                         for i, line in enumerate(small_lines_wrapped):
                             y = header_top - (start_frac_small + i * spacing_frac) * header_height
-                            ax.text(0.06, y, line, fontsize=7.5, color=self._SMALL_TEXT,
+                            ax.text(cfg.content_margin, y, line, fontsize=7.5, color=self._SMALL_TEXT,
                                     ha='left', va='top', transform=ax.transAxes)
                 # Prepare organisation title (split after first space)
                 org = report.organization.strip()
@@ -278,34 +308,39 @@ class ReportGenerator:
                 team_y = header_bottom + cfg.team_line_offset * header_height
                 if page_number == 1:
                     # Draw organisation, station and team lines
-                    ax.text(0.06, org_y1, title_text, fontsize=34, color=self._ACCENT_YELLOW,
+                    ax.text(cfg.content_margin, org_y1, title_text, fontsize=34, color=self._ACCENT_YELLOW,
                             fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    ax.text(0.06, station_y, report.station, fontsize=13, color=self._HEADER_TEXT,
+                    ax.text(cfg.content_margin, station_y, report.station, fontsize=13, color=self._HEADER_TEXT,
                             ha='left', va='top', transform=ax.transAxes)
-                    ax.text(0.06, team_y, report.team_name, fontsize=13, color=self._HEADER_TEXT,
+                    ax.text(cfg.content_margin, team_y, report.team_name, fontsize=13, color=self._HEADER_TEXT,
                             ha='left', va='top', transform=ax.transAxes)
-                    # Draw logo
-                    logo_aspect = self.logo.width / (self.logo.height * 0.83)
+                    # Draw logo.  Apply height compensation from the configuration
+                    # to fine‑tune the perceived aspect ratio.  See the
+                    # ``logo_height_compensation`` attribute in ReportConfig for
+                    # details.  A value < 1.0 will effectively make the logo
+                    # appear wider.
+                    raw_aspect = self.logo.width / self.logo.height
+                    adjusted_aspect = raw_aspect / cfg.logo_height_compensation if cfg.logo_height_compensation else raw_aspect
                     logo_w = cfg.logo_width_fraction
-                    logo_h = logo_w / logo_aspect
-                    logo_x = 1 - 0.06 - logo_w
+                    logo_h = logo_w / adjusted_aspect
+                    logo_x = 1 - cfg.content_margin - logo_w
                     logo_y = header_bottom + (header_height - logo_h) / 2
                     ax.imshow(self.logo, extent=(logo_x, logo_x + logo_w, logo_y, logo_y + logo_h),
                               transform=ax.transAxes, zorder=1)
                     # Report title and section heading
-                    body_top = header_bottom - 0.02
+                    body_top = header_bottom - cfg.body_gap
                     title_y = body_top
-                    sub_y = body_top - 0.06
-                    ax.text(0.06, title_y, f'Отчёт за {report.month} {report.year}', fontsize=24,
+                    sub_y = body_top - cfg.subheading_gap
+                    ax.text(cfg.content_margin, title_y, f'Отчёт за {report.month} {report.year}', fontsize=24,
                             color=self._SUBHEADER_GREEN, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    ax.text(0.06, sub_y, f'За {report.month} {report.year} проведено:', fontsize=18,
+                    ax.text(cfg.content_margin, sub_y, f'За {report.month} {report.year} проведено:', fontsize=18,
                             color=self._RED, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    y_start = sub_y - 0.08  # start of list after headings
+                    y_start = sub_y - cfg.list_gap  # start of list after headings
                 else:
                     # Draw only the organisation name on subsequent pages
-                    ax.text(0.06, org_y1, title_text, fontsize=34, color=self._ACCENT_YELLOW,
+                    ax.text(cfg.content_margin, org_y1, title_text, fontsize=34, color=self._ACCENT_YELLOW,
                             fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    y_start = header_bottom - 0.02
+                    y_start = header_bottom - cfg.body_gap
                 # Determine how many list lines fit on this page (use global lines_per_page)
                 lines_remaining = total_lines - current_index
                 lines_this_page = min(lines_remaining, lines_per_page_global)
@@ -313,7 +348,7 @@ class ReportGenerator:
                 list_y = y_start
                 for i in range(lines_this_page):
                     indent, text = flat_lines[current_index + i]
-                    x_pos = 0.06 + 0.02 * indent
+                    x_pos = cfg.content_margin + cfg.sub_indent * indent
                     ax.text(x_pos, list_y, text, fontsize=11, color=self._BODY_TEXT,
                             ha='left', va='top', transform=ax.transAxes)
                     list_y -= cfg.line_height
@@ -321,14 +356,17 @@ class ReportGenerator:
                 # If all lines are drawn, add signature on the last page
                 if current_index >= total_lines:
                     # Attempt to place signature on this page if there is space below the last line
-                    sig_required_height = 0.07
+                    sig_required_height = cfg.signature_min_height
                     if (list_y - sig_required_height) > cfg.bottom_margin:
-                        sig_y = list_y - 0.05
-                        if sig_y < 0.08:
-                            sig_y = 0.08
-                        ax.text(0.06, sig_y, 'Командир Добровольной Народной Дружины:', fontsize=13,
+                        sig_y = list_y - cfg.signature_offset
+                        # Ensure signature does not collide with header on very sparse pages
+                        minimum_y = cfg.bottom_margin + cfg.signature_offset
+                        if sig_y < minimum_y:
+                            sig_y = minimum_y
+                        ax.text(cfg.content_margin, sig_y, 'Командир Добровольной Народной Дружины:', fontsize=13,
                                 color=self._BODY_TEXT, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                        ax.text(0.06, sig_y - 0.03, report.commander, fontsize=13, color=self._BODY_TEXT,
+                        ax.text(cfg.content_margin, sig_y - cfg.signature_line_gap, report.commander, fontsize=13,
+                                color=self._BODY_TEXT,
                                 ha='left', va='top', transform=ax.transAxes)
                     else:
                         # Create an extra page for the signature
@@ -341,7 +379,8 @@ class ReportGenerator:
                         header_height2 = cfg.header_height * cfg.small_header_factor
                         header_bottom2 = header_top2 - header_height2
                         ax.add_patch(
-                            plt.Rectangle((0, header_bottom2), 1, header_height2, color=self._GREEN_DARK, transform=ax.transAxes)
+                            plt.Rectangle((0, header_bottom2), 1, header_height2, color=self._GREEN_DARK,
+                                          transform=ax.transAxes)
                         )
                         if small_lines_wrapped:
                             # Dynamically distribute wrapped small lines within the reserved portion
@@ -352,14 +391,18 @@ class ReportGenerator:
                                 spacing_frac = reserved_frac_small / n
                                 for i, line in enumerate(small_lines_wrapped):
                                     y = header_top2 - (start_frac_small + i * spacing_frac) * header_height2
-                                    ax.text(0.06, y, line, fontsize=7.5, color=self._SMALL_TEXT,
+                                    ax.text(cfg.content_margin, y, line, fontsize=7.5, color=self._SMALL_TEXT,
                                             ha='left', va='top', transform=ax.transAxes)
-                        ax.text(0.06, header_top2 - cfg.org_line1_offset * header_height2, title_text, fontsize=34,
-                                color=self._ACCENT_YELLOW, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                        sig_y2 = header_bottom2 - 0.1
-                        ax.text(0.06, sig_y2, 'Командир Добровольной Народной Дружины:', fontsize=13,
+                        ax.text(cfg.content_margin, header_top2 - cfg.org_line1_offset * header_height2, title_text,
+                                fontsize=34,
+                                color=self._ACCENT_YELLOW, fontweight='bold', ha='left', va='top',
+                                transform=ax.transAxes)
+                        # Place signature block on the extra page using configured offsets
+                        sig_y2 = header_bottom2 - cfg.body_gap - cfg.signature_offset
+                        ax.text(cfg.content_margin, sig_y2, 'Командир Добровольной Народной Дружины:', fontsize=13,
                                 color=self._BODY_TEXT, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                        ax.text(0.06, sig_y2 - 0.03, report.commander, fontsize=13, color=self._BODY_TEXT,
+                        ax.text(cfg.content_margin, sig_y2 - cfg.signature_line_gap, report.commander, fontsize=13,
+                                color=self._BODY_TEXT,
                                 ha='left', va='top', transform=ax.transAxes)
                         pdf.savefig(fig)
                         plt.close(fig)
