@@ -9,7 +9,7 @@ of activities).  It then produces a professionally formatted A4 PDF
 according to a fixed layout.  All font sizes, margins and line spacing
 are constant across pages to ensure visual consistency.
 
-Usage::
+Usage:
 
     python generate_report.py --input data.json --constants constants.json \
         --logo emblem.png --output report.pdf
@@ -22,13 +22,92 @@ import argparse
 import json
 import textwrap
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import matplotlib
 
 matplotlib.use('Agg')  # ensure non‑interactive backend
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from PIL import Image
+
+
+# === Constants for text formatting ===
+class TextFormatting:
+    """Constants for text formatting throughout the report."""
+    SMALL_HEADER_WRAP_WIDTH = 60
+    ACTIVITY_TEXT_WRAP_WIDTH = 80
+    ACTIVITY_NUMBERING_FORMAT = "{idx}. "
+    SUBITEM_NUMBERING_FORMAT = "{idx}) "
+    FIRST_PAGE_NUMBER = 1
+    MIN_LINES_PER_PAGE = 1
+    ORGANIZATION_NAME_SPLIT_LIMIT = 1
+
+
+# === Constants for page layout ===
+class PageDimensions:
+    """A4 page dimensions in inches."""
+    WIDTH_INCHES = 8.27
+    HEIGHT_INCHES = 11.69
+
+
+class CoordinateSystem:
+    """Constants for matplotlib coordinate system."""
+    PAGE_TOP = 1.0
+    PAGE_BOTTOM = 0.0
+    PAGE_LEFT = 0.0
+    PAGE_RIGHT = 1.0
+    FULL_WIDTH = 1.0
+
+
+class ZOrder:
+    """Z-order constants for layering elements."""
+    HEADER_BACKGROUND = 0
+    LOGO_PANEL = 1
+    LOGO_IMAGE = 2
+
+
+# === Constants for font sizes ===
+class FontSizes:
+    """Font sizes used throughout the report."""
+    SMALL_HEADER_TEXT = 7.5
+    ORGANIZATION_TITLE = 34
+    STATION_TEAM_TEXT = 13
+    REPORT_TITLE = 24
+    SECTION_HEADING = 18
+    ACTIVITY_LIST = 11
+    SIGNATURE = 13
+
+
+# === Constants for text alignment ===
+class TextAlignment:
+    """Text alignment constants."""
+    LEFT = 'left'
+    TOP = 'top'
+    BOLD = 'bold'
+
+
+# === Constants for text labels ===
+class TextLabels:
+    """Russian text labels used in the report."""
+    REPORT_TITLE_TEMPLATE = 'Отчёт за {month} {year}'
+    SECTION_HEADING_TEMPLATE = 'За {month} {year} проведено:'
+    SIGNATURE_TITLE = 'Командир Добровольной Народной Дружины:'
+
+
+# === Constants for image processing ===
+class ImageProcessing:
+    """Constants for logo image processing."""
+    RGBA_MODE = 'RGBA'
+    TRANSPARENT_COLOR = (0, 0, 0, 0)
+    ALPHA_CHANNEL_INDEX = -1
+
+
+# === Constants for activity list indentation ===
+class IndentationLevel:
+    """Indentation levels for activities."""
+    MAIN_ACTIVITY = 0
+    SUB_ITEM = 1
 
 
 @dataclass
@@ -166,14 +245,825 @@ class ReportData:
     small_lines: List[str] = field(default_factory=list)
 
 
+@dataclass
+class HeaderGeometry:
+    """Encapsulates header positioning information."""
+    top: float
+    bottom: float
+    height: float
+
+
+@dataclass
+class PageLayout:
+    """Encapsulates the calculated layout for a page."""
+    header: HeaderGeometry
+    body_start_y: float
+    available_height: float
+
+
+class LogoProcessor:
+    """Handles logo image loading and preprocessing."""
+
+    @staticmethod
+    def load_and_prepare(logo_path: str) -> Image.Image:
+        """
+        Load logo image, crop transparent borders, and ensure square dimensions.
+
+        Args:
+            logo_path: Path to the logo image file.
+
+        Returns:
+            Prepared logo image with square dimensions.
+        """
+        img = Image.open(logo_path).convert(ImageProcessing.RGBA_MODE)
+        img = LogoProcessor._crop_transparent_border(img)
+        img = LogoProcessor._ensure_square(img)
+        return img
+
+    @staticmethod
+    def _crop_transparent_border(img: Image.Image) -> Image.Image:
+        """Crop transparent borders from the image."""
+        alpha = img.split()[ImageProcessing.ALPHA_CHANNEL_INDEX]
+        bbox = alpha.getbbox()
+        if bbox:
+            img = img.crop(bbox)
+        return img
+
+    @staticmethod
+    def _ensure_square(img: Image.Image) -> Image.Image:
+        """Ensure the image has square dimensions by padding if necessary."""
+        width, height = img.size
+        if width != height:
+            side = max(width, height)
+            square_img = Image.new(
+                ImageProcessing.RGBA_MODE,
+                (side, side),
+                ImageProcessing.TRANSPARENT_COLOR
+            )
+            offset_x = (side - width) // 2
+            offset_y = (side - height) // 2
+            square_img.paste(img, (offset_x, offset_y))
+            return square_img
+        return img
+
+
+class ActivityFlattener:
+    """Converts hierarchical activities into flat list of formatted lines."""
+
+    def __init__(self, wrap_width: int = TextFormatting.ACTIVITY_TEXT_WRAP_WIDTH):
+        """
+        Initialize the flattener.
+
+        Args:
+            wrap_width: Character width for text wrapping.
+        """
+        self.wrapper = textwrap.TextWrapper(width=wrap_width)
+
+    def flatten(self, activities: List[Activity]) -> List[Tuple[int, str]]:
+        """
+        Flatten activities into a list of (indent_level, formatted_text) tuples.
+
+        Args:
+            activities: List of Activity objects.
+
+        Returns:
+            List of tuples containing indent level and formatted text.
+        """
+        flat_lines: List[Tuple[int, str]] = []
+
+        for idx, activity in enumerate(activities, start=TextFormatting.FIRST_PAGE_NUMBER):
+            flat_lines.extend(self._format_main_activity(activity, idx))
+            flat_lines.extend(self._format_subitems(activity.subitems))
+
+        return flat_lines
+
+    def _format_main_activity(self, activity: Activity, index: int) -> List[Tuple[int, str]]:
+        """Format a main activity with numbering."""
+        lines = self.wrapper.wrap(activity.text)
+        if lines:
+            lines[0] = TextFormatting.ACTIVITY_NUMBERING_FORMAT.format(idx=index) + lines[0]
+        return [(IndentationLevel.MAIN_ACTIVITY, line) for line in lines]
+
+    def _format_subitems(self, subitems: List[str]) -> List[Tuple[int, str]]:
+        """Format subitems with numbering and indentation."""
+        flat_subitems: List[Tuple[int, str]] = []
+
+        for sub_idx, subitem in enumerate(subitems or [], start=TextFormatting.FIRST_PAGE_NUMBER):
+            sub_lines = self.wrapper.wrap(subitem)
+            if sub_lines:
+                sub_lines[0] = TextFormatting.SUBITEM_NUMBERING_FORMAT.format(idx=sub_idx) + sub_lines[0]
+            flat_subitems.extend([(IndentationLevel.SUB_ITEM, line) for line in sub_lines])
+
+        return flat_subitems
+
+
+class LayoutCalculator:
+    """Calculates page layout dimensions."""
+
+    def __init__(self, config: ReportConfig):
+        """
+        Initialize calculator with configuration.
+
+        Args:
+            config: Report configuration object.
+        """
+        self.config = config
+
+    def calculate_header_geometry(self, is_first_page: bool) -> HeaderGeometry:
+        """
+        Calculate header positioning for a page.
+
+        Args:
+            is_first_page: Whether this is the first page.
+
+        Returns:
+            HeaderGeometry object with calculated positions.
+        """
+        cfg = self.config
+        header_top = CoordinateSystem.PAGE_TOP - cfg.top_margin
+
+        if is_first_page:
+            header_height = cfg.header_height
+        else:
+            header_height = cfg.header_height * cfg.small_header_factor
+
+        header_bottom = header_top - header_height
+
+        return HeaderGeometry(
+            top=header_top,
+            bottom=header_bottom,
+            height=header_height
+        )
+
+    def calculate_first_page_layout(self) -> PageLayout:
+        """Calculate layout dimensions for the first page."""
+        cfg = self.config
+        header = self.calculate_header_geometry(is_first_page=True)
+
+        body_top = header.bottom - cfg.body_gap
+        subheading_y = body_top - cfg.subheading_gap
+        list_start_y = subheading_y - cfg.list_gap
+        available_height = list_start_y - cfg.bottom_margin
+
+        return PageLayout(
+            header=header,
+            body_start_y=list_start_y,
+            available_height=available_height
+        )
+
+    def calculate_subsequent_page_layout(self) -> PageLayout:
+        """Calculate layout dimensions for subsequent pages."""
+        cfg = self.config
+        header = self.calculate_header_geometry(is_first_page=False)
+
+        body_start_y = header.bottom - cfg.body_gap
+        available_height = body_start_y - cfg.bottom_margin
+
+        return PageLayout(
+            header=header,
+            body_start_y=body_start_y,
+            available_height=available_height
+        )
+
+    def calculate_lines_per_page(self) -> int:
+        """
+        Calculate how many activity lines fit on a page.
+
+        Uses the minimum available height across first and subsequent pages
+        to ensure consistent line density.
+
+        Returns:
+            Number of lines that fit on a page.
+        """
+        first_page = self.calculate_first_page_layout()
+        subsequent_page = self.calculate_subsequent_page_layout()
+
+        min_available = min(first_page.available_height, subsequent_page.available_height)
+        lines_per_page = max(
+            int(min_available // self.config.line_height),
+            TextFormatting.MIN_LINES_PER_PAGE
+        )
+
+        return lines_per_page
+
+
+class HeaderRenderer:
+    """Renders header elements on a page."""
+
+    def __init__(self, config: ReportConfig):
+        """
+        Initialize renderer with configuration.
+
+        Args:
+            config: Report configuration object.
+        """
+        self.config = config
+
+    def render_background(self, ax, header: HeaderGeometry) -> None:
+        """
+        Render the colored background bar for the header.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+        """
+        ax.add_patch(
+            plt.Rectangle(
+                (CoordinateSystem.PAGE_LEFT, header.bottom),
+                CoordinateSystem.FULL_WIDTH,
+                header.height,
+                color=self.config.colours['green_dark'],
+                transform=ax.transAxes,
+                zorder=ZOrder.HEADER_BACKGROUND
+            )
+        )
+
+    def render_small_lines(self, ax, header: HeaderGeometry, small_lines: List[str]) -> None:
+        """
+        Render small header lines at the top of the header bar.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+            small_lines: List of wrapped small header lines.
+        """
+        if not small_lines:
+            return
+
+        cfg = self.config
+        num_lines = len(small_lines)
+
+        if num_lines > 0:
+            spacing_fraction = cfg.small_lines_reserved / num_lines
+
+            for i, line in enumerate(small_lines):
+                y_position = header.top - (cfg.small_lines_start + i * spacing_fraction) * header.height
+                ax.text(
+                    cfg.content_margin,
+                    y_position,
+                    line,
+                    fontsize=FontSizes.SMALL_HEADER_TEXT,
+                    color=cfg.colours['small_text'],
+                    ha=TextAlignment.LEFT,
+                    va=TextAlignment.TOP,
+                    transform=ax.transAxes
+                )
+
+    def render_organization_name(self, ax, header: HeaderGeometry, organization: str) -> None:
+        """
+        Render the organization name in the header.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+            organization: Organization name text.
+        """
+        cfg = self.config
+        org_y = header.top - cfg.org_line1_offset * header.height
+
+        ax.text(
+            cfg.content_margin,
+            org_y,
+            organization,
+            fontsize=FontSizes.ORGANIZATION_TITLE,
+            color=cfg.colours['accent_yellow'],
+            fontweight=TextAlignment.BOLD,
+            ha=TextAlignment.LEFT,
+            va=TextAlignment.TOP,
+            transform=ax.transAxes
+        )
+
+
+class FirstPageRenderer:
+    """Renders elements specific to the first page."""
+
+    def __init__(self, config: ReportConfig, logo: Image.Image):
+        """
+        Initialize renderer.
+
+        Args:
+            config: Report configuration object.
+            logo: Prepared logo image.
+        """
+        self.config = config
+        self.logo = logo
+
+    def render_station_and_team(self, ax, header: HeaderGeometry, report: ReportData) -> None:
+        """
+        Render station and team name lines.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+            report: Report data.
+        """
+        cfg = self.config
+        station_y = header.bottom + cfg.station_line_offset * header.height
+        team_y = header.bottom + cfg.team_line_offset * header.height
+
+        ax.text(
+            cfg.content_margin,
+            station_y,
+            report.station,
+            fontsize=FontSizes.STATION_TEAM_TEXT,
+            color=cfg.colours['header_text'],
+            ha=TextAlignment.LEFT,
+            va=TextAlignment.TOP,
+            transform=ax.transAxes
+        )
+
+        ax.text(
+            cfg.content_margin,
+            team_y,
+            report.team_name,
+            fontsize=FontSizes.STATION_TEAM_TEXT,
+            color=cfg.colours['header_text'],
+            ha=TextAlignment.LEFT,
+            va=TextAlignment.TOP,
+            transform=ax.transAxes
+        )
+
+    def render_logo(self, ax, header: HeaderGeometry) -> None:
+        """
+        Render the logo with its background panel.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+        """
+        cfg = self.config
+
+        # Calculate logo dimensions
+        raw_aspect = self.logo.width / self.logo.height
+        adjusted_aspect = (
+            raw_aspect / cfg.logo_height_compensation
+            if cfg.logo_height_compensation
+            else raw_aspect
+        )
+
+        logo_width = cfg.logo_width_fraction
+        logo_height = logo_width / adjusted_aspect
+        logo_x = CoordinateSystem.PAGE_RIGHT - cfg.content_margin - logo_width
+        logo_y = header.bottom + (header.height - logo_height) / 2
+
+        # Draw background panel
+        panel_width = CoordinateSystem.PAGE_RIGHT - logo_x
+        ax.add_patch(
+            plt.Rectangle(
+                (logo_x, header.bottom),
+                panel_width,
+                header.height,
+                color=cfg.logo_bg_colour,
+                transform=ax.transAxes,
+                zorder=ZOrder.LOGO_PANEL
+            )
+        )
+
+        # Draw logo
+        ax.imshow(
+            self.logo,
+            extent=(logo_x, logo_x + logo_width, logo_y, logo_y + logo_height),
+            transform=ax.transAxes,
+            zorder=ZOrder.LOGO_IMAGE
+        )
+
+    def render_titles(self, ax, header: HeaderGeometry, report: ReportData) -> float:
+        """
+        Render report title and section heading.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+            report: Report data.
+
+        Returns:
+            Y-coordinate where the activity list should start.
+        """
+        cfg = self.config
+
+        body_top = header.bottom - cfg.body_gap
+        title_y = body_top
+        subheading_y = body_top - cfg.subheading_gap
+
+        # Main title
+        title_text = TextLabels.REPORT_TITLE_TEMPLATE.format(
+            month=report.month,
+            year=report.year
+        )
+        ax.text(
+            cfg.content_margin,
+            title_y,
+            title_text,
+            fontsize=FontSizes.REPORT_TITLE,
+            color=cfg.colours['subheader_green'],
+            fontweight=TextAlignment.BOLD,
+            ha=TextAlignment.LEFT,
+            va=TextAlignment.TOP,
+            transform=ax.transAxes
+        )
+
+        # Section heading
+        heading_text = TextLabels.SECTION_HEADING_TEMPLATE.format(
+            month=report.month,
+            year=report.year
+        )
+        ax.text(
+            cfg.content_margin,
+            subheading_y,
+            heading_text,
+            fontsize=FontSizes.SECTION_HEADING,
+            color=cfg.colours['red'],
+            fontweight=TextAlignment.BOLD,
+            ha=TextAlignment.LEFT,
+            va=TextAlignment.TOP,
+            transform=ax.transAxes
+        )
+
+        return subheading_y - cfg.list_gap
+
+
+class ActivityListRenderer:
+    """Renders the activity list on a page."""
+
+    def __init__(self, config: ReportConfig):
+        """
+        Initialize renderer.
+
+        Args:
+            config: Report configuration object.
+        """
+        self.config = config
+
+    def render_lines(
+            self,
+            ax,
+            flat_lines: List[Tuple[int, str]],
+            start_index: int,
+            num_lines: int,
+            start_y: float
+    ) -> float:
+        """
+        Render a portion of the activity list.
+
+        Args:
+            ax: Matplotlib axes object.
+            flat_lines: Flattened list of activities.
+            start_index: Index to start rendering from.
+            num_lines: Number of lines to render.
+            start_y: Y-coordinate to start rendering.
+
+        Returns:
+            Y-coordinate after the last rendered line.
+        """
+        cfg = self.config
+        current_y = start_y
+
+        for i in range(num_lines):
+            indent_level, text = flat_lines[start_index + i]
+            x_position = cfg.content_margin + cfg.sub_indent * indent_level
+
+            ax.text(
+                x_position,
+                current_y,
+                text,
+                fontsize=FontSizes.ACTIVITY_LIST,
+                color=cfg.colours['body_text'],
+                ha=TextAlignment.LEFT,
+                va=TextAlignment.TOP,
+                transform=ax.transAxes
+            )
+
+            current_y -= cfg.line_height
+
+        return current_y
+
+
+class SignatureRenderer:
+    """Renders the signature block."""
+
+    def __init__(self, config: ReportConfig):
+        """
+        Initialize renderer.
+
+        Args:
+            config: Report configuration object.
+        """
+        self.config = config
+
+    def render(self, ax, y_position: float, commander_name: str) -> None:
+        """
+        Render the signature block at the specified position.
+
+        Args:
+            ax: Matplotlib axes object.
+            y_position: Y-coordinate for the signature.
+            commander_name: Name of the commander.
+        """
+        cfg = self.config
+
+        ax.text(
+            cfg.content_margin,
+            y_position,
+            TextLabels.SIGNATURE_TITLE,
+            fontsize=FontSizes.SIGNATURE,
+            color=cfg.colours['body_text'],
+            fontweight=TextAlignment.BOLD,
+            ha=TextAlignment.LEFT,
+            va=TextAlignment.TOP,
+            transform=ax.transAxes
+        )
+
+        ax.text(
+            cfg.content_margin,
+            y_position - cfg.signature_line_gap,
+            commander_name,
+            fontsize=FontSizes.SIGNATURE,
+            color=cfg.colours['body_text'],
+            ha=TextAlignment.LEFT,
+            va=TextAlignment.TOP,
+            transform=ax.transAxes
+        )
+
+    def can_fit_on_page(self, current_y: float) -> bool:
+        """
+        Check if signature block can fit at the given Y position.
+
+        Args:
+            current_y: Current Y-coordinate.
+
+        Returns:
+            True if signature fits, False otherwise.
+        """
+        required_height = self.config.signature_min_height
+        return (current_y - required_height) > self.config.bottom_margin
+
+    def calculate_signature_position(self, list_end_y: float) -> float:
+        """
+        Calculate appropriate Y position for signature.
+
+        Args:
+            list_end_y: Y-coordinate where the list ended.
+
+        Returns:
+            Y-coordinate for signature placement.
+        """
+        cfg = self.config
+        sig_y = list_end_y - cfg.signature_offset
+        minimum_y = cfg.bottom_margin + cfg.signature_offset
+
+        return max(sig_y, minimum_y)
+
+
+class PageRenderer:
+    """Orchestrates rendering of a complete page."""
+
+    def __init__(
+            self,
+            config: ReportConfig,
+            logo: Image.Image,
+            small_lines_wrapped: List[str],
+            organization_title: str
+    ):
+        """
+        Initialize page renderer.
+
+        Args:
+            config: Report configuration object.
+            logo: Prepared logo image.
+            small_lines_wrapped: Wrapped small header lines.
+            organization_title: Formatted organization title.
+        """
+        self.config = config
+        self.logo = logo
+        self.small_lines_wrapped = small_lines_wrapped
+        self.organization_title = organization_title
+
+        self.header_renderer = HeaderRenderer(config)
+        self.first_page_renderer = FirstPageRenderer(config, logo)
+        self.activity_renderer = ActivityListRenderer(config)
+        self.signature_renderer = SignatureRenderer(config)
+
+    def create_figure(self):
+        """Create a new matplotlib figure for a page."""
+        fig = plt.figure(figsize=(PageDimensions.WIDTH_INCHES, PageDimensions.HEIGHT_INCHES))
+        ax = fig.add_axes([CoordinateSystem.PAGE_LEFT, CoordinateSystem.PAGE_BOTTOM,
+                           CoordinateSystem.FULL_WIDTH, CoordinateSystem.FULL_WIDTH])
+        ax.axis('off')
+        return fig, ax
+
+    def render_common_header(self, ax, header: HeaderGeometry) -> None:
+        """
+        Render header elements common to all pages.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+        """
+        self.header_renderer.render_background(ax, header)
+        self.header_renderer.render_small_lines(ax, header, self.small_lines_wrapped)
+        self.header_renderer.render_organization_name(ax, header, self.organization_title)
+
+    def render_first_page_content(self, ax, header: HeaderGeometry, report: ReportData) -> float:
+        """
+        Render content specific to the first page.
+
+        Args:
+            ax: Matplotlib axes object.
+            header: Header geometry information.
+            report: Report data.
+
+        Returns:
+            Y-coordinate where the activity list should start.
+        """
+        self.first_page_renderer.render_station_and_team(ax, header, report)
+        self.first_page_renderer.render_logo(ax, header)
+        return self.first_page_renderer.render_titles(ax, header, report)
+
+
+class ReportGenerator:
+    """Generates a PDF report from supplied data and a logo."""
+
+    def __init__(self, logo_path: str, config: Optional[ReportConfig] = None) -> None:
+        """
+        Initialize the report generator.
+
+        Args:
+            logo_path: Path to the logo image file.
+            config: Optional report configuration. Uses defaults if not provided.
+        """
+        self.logo = LogoProcessor.load_and_prepare(logo_path)
+        self.config = config or ReportConfig()
+        self.layout_calculator = LayoutCalculator(self.config)
+
+    def _prepare_organization_title(self, organization: str) -> str:
+        """
+        Format organization name for display (split after first space).
+
+        Args:
+            organization: Organization name.
+
+        Returns:
+            Formatted organization title.
+        """
+        org = organization.strip()
+        if ' ' in org:
+            return org.replace(' ', '\n', TextFormatting.ORGANIZATION_NAME_SPLIT_LIMIT)
+        return org
+
+    def _wrap_small_lines(self, lines: List[str]) -> List[str]:
+        """
+        Wrap small header lines to prevent overflow.
+
+        Args:
+            lines: List of small header lines.
+
+        Returns:
+            List of wrapped lines.
+        """
+        wrapper = textwrap.TextWrapper(width=TextFormatting.SMALL_HEADER_WRAP_WIDTH)
+        wrapped: List[str] = []
+        for line in lines:
+            wrapped.extend(wrapper.wrap(line))
+        return wrapped
+
+    def generate(self, report: ReportData, output_path: str) -> None:
+        """
+        Generate a multi-page PDF report.
+
+        Args:
+            report: Report data to render.
+            output_path: Path where the PDF should be saved.
+        """
+        # Prepare data
+        flattener = ActivityFlattener()
+        flat_lines = flattener.flatten(report.activities)
+        total_lines = len(flat_lines)
+
+        small_lines_wrapped = self._wrap_small_lines(report.small_lines)
+        organization_title = self._prepare_organization_title(report.organization)
+
+        # Calculate layout
+        lines_per_page = self.layout_calculator.calculate_lines_per_page()
+
+        # Initialize renderers
+        page_renderer = PageRenderer(
+            self.config,
+            self.logo,
+            small_lines_wrapped,
+            organization_title
+        )
+
+        # Generate pages
+        current_index = 0
+        page_number = 0
+
+        with PdfPages(output_path) as pdf:
+            while current_index < total_lines or page_number == 0:
+                page_number += 1
+                is_first_page = (page_number == TextFormatting.FIRST_PAGE_NUMBER)
+
+                fig, ax = page_renderer.create_figure()
+
+                # Calculate and render header
+                header = self.layout_calculator.calculate_header_geometry(is_first_page)
+                page_renderer.render_common_header(ax, header)
+
+                # Determine list start position
+                if is_first_page:
+                    list_start_y = page_renderer.render_first_page_content(ax, header, report)
+                else:
+                    list_start_y = header.bottom - self.config.body_gap
+
+                # Render activity lines
+                lines_remaining = total_lines - current_index
+                lines_this_page = min(lines_remaining, lines_per_page)
+
+                list_end_y = page_renderer.activity_renderer.render_lines(
+                    ax,
+                    flat_lines,
+                    current_index,
+                    lines_this_page,
+                    list_start_y
+                )
+
+                current_index += lines_this_page
+
+                # Handle signature on last page
+                if current_index >= total_lines:
+                    self._render_signature(
+                        pdf,
+                        page_renderer,
+                        list_end_y,
+                        report.commander,
+                        organization_title,
+                        small_lines_wrapped
+                    )
+
+                pdf.savefig(fig)
+                plt.close(fig)
+
+    def _render_signature(
+            self,
+            pdf: PdfPages,
+            page_renderer: PageRenderer,
+            list_end_y: float,
+            commander: str,
+            organization_title: str,
+            small_lines_wrapped: List[str]
+    ) -> None:
+        """
+        Render signature block, creating a new page if necessary.
+
+        Args:
+            pdf: PDF pages object.
+            page_renderer: Page renderer instance.
+            list_end_y: Y-coordinate where the list ended.
+            commander: Commander name.
+            organization_title: Formatted organization title.
+            small_lines_wrapped: Wrapped small header lines.
+        """
+        signature_renderer = page_renderer.signature_renderer
+
+        if signature_renderer.can_fit_on_page(list_end_y):
+            # Signature fits on current page
+            sig_y = signature_renderer.calculate_signature_position(list_end_y)
+
+            # Get the current figure's axes
+            fig = plt.gcf()
+            ax = fig.get_axes()[0]
+            signature_renderer.render(ax, sig_y, commander)
+        else:
+            # Need a new page for signature
+            fig, ax = page_renderer.create_figure()
+
+            header = self.layout_calculator.calculate_header_geometry(is_first_page=False)
+            page_renderer.render_common_header(ax, header)
+
+            sig_y = header.bottom - self.config.body_gap - self.config.signature_offset
+            signature_renderer.render(ax, sig_y, commander)
+
+            pdf.savefig(fig)
+            plt.close(fig)
+
+
 def parse_report_data(data: dict) -> ReportData:
-    """Build a ReportData instance from a dictionary."""
+    """
+    Build a ReportData instance from a dictionary.
+
+    Args:
+        data: Dictionary containing report data.
+
+    Returns:
+        ReportData instance.
+    """
     activities: List[Activity] = []
     for item in data.get('activities', []):
         text = item.get('text', '').strip()
         subitems = item.get('subitems') or []
         activities.append(Activity(text=text, subitems=subitems))
+
     small_lines = data.get('small_lines', [])
+
     return ReportData(
         month=data['month'],
         year=int(data['year']),
@@ -186,277 +1076,59 @@ def parse_report_data(data: dict) -> ReportData:
     )
 
 
-class ReportGenerator:
-    """Generates a PDF report from supplied data and a logo."""
-
-    def __init__(self, logo_path: str, config: Optional[ReportConfig] = None) -> None:
-        # Load logo and crop transparent border
-        img = Image.open(logo_path).convert('RGBA')
-        alpha = img.split()[-1]
-        bbox = alpha.getbbox()
-        if bbox:
-            img = img.crop(bbox)
-        w, h = img.size
-        if w != h:
-            side = max(w, h)
-            sq = Image.new('RGBA', (side, side), (0, 0, 0, 0))
-            sq.paste(img, ((side - w) // 2, (side - h) // 2))
-            img = sq
-        self.logo = img
-        # Apply configuration
-        self.cfg = config or ReportConfig()
-        colours = self.cfg.colours
-        self._GREEN_DARK = colours['green_dark']
-        self._ACCENT_YELLOW = colours['accent_yellow']
-        self._HEADER_TEXT = colours['header_text']
-        self._SMALL_TEXT = colours['small_text']
-        self._SUBHEADER_GREEN = colours['subheader_green']
-        self._BODY_TEXT = colours['body_text']
-        self._RED = colours['red']
-        # Logo background colour.  Use the value from the configuration if present.
-        self._LOGO_BG = self.cfg.logo_bg_colour
-
-    def _wrap_small_lines(self, lines: List[str]) -> List[str]:
-        """Wrap small header lines to avoid overflowing the header."""
-        wrapper = textwrap.TextWrapper(width=60)
-        out: List[str] = []
-        for line in lines:
-            out.extend(wrapper.wrap(line))
-        return out
-
-    def generate(self, report: ReportData, output_path: str) -> None:
-        """Generate a multi‑page PDF report."""
-        cfg = self.cfg
-        # Flatten activities into a list of (indent_level, lines)
-        flat_lines: List[tuple[int, str]] = []
-        wrapper = textwrap.TextWrapper(width=80)
-        for idx, act in enumerate(report.activities, start=1):
-            main_lines = wrapper.wrap(act.text)
-            if main_lines:
-                main_lines[0] = f"{idx}. " + main_lines[0]
-            flat_lines.extend([(0, line) for line in main_lines])
-            for s_idx, sub in enumerate(act.subitems or [], start=1):
-                sub_lines = wrapper.wrap(sub)
-                if sub_lines:
-                    sub_lines[0] = f"{s_idx}) " + sub_lines[0]
-                flat_lines.extend([(1, line) for line in sub_lines])
-        total_lines = len(flat_lines)
-        small_lines_wrapped = self._wrap_small_lines(report.small_lines)
-        # Pre‑compute a global number of lines per page based on the smallest available height
-        # on the first and subsequent pages.  This ensures consistent vertical density across all pages.
-        header_top1 = 1.0 - cfg.top_margin
-        header_bottom1 = header_top1 - cfg.header_height
-        # Calculate available height on the first page using configured gaps
-        body_top1 = header_bottom1 - cfg.body_gap
-        sub_y1 = body_top1 - cfg.subheading_gap
-        y_start_first = sub_y1 - cfg.list_gap
-        available_first = y_start_first - cfg.bottom_margin
-        # Small header for pages beyond the first
-        header_height_small = cfg.header_height * cfg.small_header_factor
-        header_bottom_small = header_top1 - header_height_small
-        y_start_other = header_bottom_small - cfg.body_gap
-        available_other = y_start_other - cfg.bottom_margin
-        # Determine minimum available height and compute lines per page
-        # Use the smallest available vertical space across the first and
-        # subsequent pages to determine how many lines fit on any page.
-        min_available = min(available_first, available_other)
-        # At least one line must fit; using int() truncates to the
-        # greatest whole number of lines that fit into the available space.
-        lines_per_page_global = max(int(min_available // cfg.line_height), 1)
-        # Start creating pages
-        from matplotlib.backends.backend_pdf import PdfPages
-        current_index = 0
-        page_number = 0
-        with PdfPages(output_path) as pdf:
-            while current_index < total_lines or page_number == 0:
-                page_number += 1
-                fig = plt.figure(figsize=(8.27, 11.69))
-                ax = fig.add_axes([0, 0, 1, 1])
-                ax.axis('off')
-                # Compute header geometry
-                header_top = 1.0 - cfg.top_margin
-                header_height = cfg.header_height if page_number == 1 else cfg.header_height * cfg.small_header_factor
-                header_bottom = header_top - header_height
-                # Draw header bar with a low z‑order so that logo panel and logo can be drawn above it
-                ax.add_patch(
-                    plt.Rectangle((0, header_bottom), 1, header_height, color=self._GREEN_DARK, transform=ax.transAxes,
-                                  zorder=0)
-                )
-                # Small lines within header
-                if small_lines_wrapped:
-                    # Dynamically distribute wrapped small lines within a reserved portion of the header.
-                    # The start and reserved fractions can be overridden via ReportConfig (see comments
-                    # on ``small_lines_start`` and ``small_lines_reserved``).  A larger list of lines
-                    # will reduce the distance between lines proportionally.  If your small header
-                    # contains more than roughly 60–65 characters per line or too many lines, consider
-                    # shortening them in ``report_constants.json`` or increasing
-                    # ``small_lines_reserved`` in the config.
-                    start_frac_small = cfg.small_lines_start
-                    reserved_frac_small = cfg.small_lines_reserved
-                    n = len(small_lines_wrapped)
-                    # Prevent division by zero – if no small lines are provided nothing is drawn.
-                    if n > 0:
-                        spacing_frac = reserved_frac_small / n
-                        for i, line in enumerate(small_lines_wrapped):
-                            y = header_top - (start_frac_small + i * spacing_frac) * header_height
-                            ax.text(cfg.content_margin, y, line, fontsize=7.5, color=self._SMALL_TEXT,
-                                    ha='left', va='top', transform=ax.transAxes)
-                # Prepare organisation title (split after first space)
-                org = report.organization.strip()
-                title_text = org.replace(' ', '\n', 1) if ' ' in org else org
-                # Positions for header lines.  Note that ``org_y2`` is
-                # intentionally omitted because the organisation name is
-                # rendered using a single call to ``ax.text`` with an embedded
-                # newline.  Having two separate y‑coordinates from an earlier
-                # implementation is therefore unnecessary and could cause
-                # confusion.  Station and team lines are anchored relative
-                # to the bottom of the header so that changes to header
-                # height propagate consistently across pages.
-                org_y1 = header_top - cfg.org_line1_offset * header_height
-                station_y = header_bottom + cfg.station_line_offset * header_height
-                team_y = header_bottom + cfg.team_line_offset * header_height
-                if page_number == 1:
-                    # Draw organisation, station and team lines
-                    ax.text(cfg.content_margin, org_y1, title_text, fontsize=34, color=self._ACCENT_YELLOW,
-                            fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    ax.text(cfg.content_margin, station_y, report.station, fontsize=13, color=self._HEADER_TEXT,
-                            ha='left', va='top', transform=ax.transAxes)
-                    ax.text(cfg.content_margin, team_y, report.team_name, fontsize=13, color=self._HEADER_TEXT,
-                            ha='left', va='top', transform=ax.transAxes)
-                    # Draw logo.  Apply height compensation from the configuration
-                    # to fine‑tune the perceived aspect ratio.  See the
-                    # ``logo_height_compensation`` attribute in ReportConfig for
-                    # details.  A value < 1.0 will effectively make the logo
-                    # appear wider.
-                    raw_aspect = self.logo.width / self.logo.height
-                    adjusted_aspect = raw_aspect / cfg.logo_height_compensation if cfg.logo_height_compensation else raw_aspect
-                    logo_w = cfg.logo_width_fraction
-                    logo_h = logo_w / adjusted_aspect
-                    logo_x = 1 - cfg.content_margin - logo_w
-                    logo_y = header_bottom + (header_height - logo_h) / 2
-                    # Draw a coloured panel behind the logo to separate it visually from the header.
-                    # The panel spans from the left edge of the logo area to the right edge of the page.
-                    panel_width = 1.0 - logo_x
-                    ax.add_patch(
-                        plt.Rectangle(
-                            (logo_x, header_bottom), panel_width, header_height,
-                            color=self._LOGO_BG, transform=ax.transAxes, zorder=1
-                        )
-                    )
-                    # Draw the logo itself on top of the coloured panel.  Use a higher z‑order so it sits above the panel.
-                    ax.imshow(
-                        self.logo,
-                        extent=(logo_x, logo_x + logo_w, logo_y, logo_y + logo_h),
-                        transform=ax.transAxes,
-                        zorder=2
-                    )
-                    # Report title and section heading
-                    body_top = header_bottom - cfg.body_gap
-                    title_y = body_top
-                    sub_y = body_top - cfg.subheading_gap
-                    ax.text(cfg.content_margin, title_y, f'Отчёт за {report.month} {report.year}', fontsize=24,
-                            color=self._SUBHEADER_GREEN, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    ax.text(cfg.content_margin, sub_y, f'За {report.month} {report.year} проведено:', fontsize=18,
-                            color=self._RED, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    y_start = sub_y - cfg.list_gap  # start of list after headings
-                else:
-                    # Draw only the organisation name on subsequent pages
-                    ax.text(cfg.content_margin, org_y1, title_text, fontsize=34, color=self._ACCENT_YELLOW,
-                            fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                    y_start = header_bottom - cfg.body_gap
-                # Determine how many list lines fit on this page (use global lines_per_page)
-                lines_remaining = total_lines - current_index
-                lines_this_page = min(lines_remaining, lines_per_page_global)
-                # Draw list lines
-                list_y = y_start
-                for i in range(lines_this_page):
-                    indent, text = flat_lines[current_index + i]
-                    x_pos = cfg.content_margin + cfg.sub_indent * indent
-                    ax.text(x_pos, list_y, text, fontsize=11, color=self._BODY_TEXT,
-                            ha='left', va='top', transform=ax.transAxes)
-                    list_y -= cfg.line_height
-                current_index += lines_this_page
-                # If all lines are drawn, add signature on the last page
-                if current_index >= total_lines:
-                    # Attempt to place signature on this page if there is space below the last line
-                    sig_required_height = cfg.signature_min_height
-                    if (list_y - sig_required_height) > cfg.bottom_margin:
-                        sig_y = list_y - cfg.signature_offset
-                        # Ensure signature does not collide with header on very sparse pages
-                        minimum_y = cfg.bottom_margin + cfg.signature_offset
-                        if sig_y < minimum_y:
-                            sig_y = minimum_y
-                        ax.text(cfg.content_margin, sig_y, 'Командир Добровольной Народной Дружины:', fontsize=13,
-                                color=self._BODY_TEXT, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                        ax.text(cfg.content_margin, sig_y - cfg.signature_line_gap, report.commander, fontsize=13,
-                                color=self._BODY_TEXT,
-                                ha='left', va='top', transform=ax.transAxes)
-                    else:
-                        # Create an extra page for the signature
-                        pdf.savefig(fig)
-                        plt.close(fig)
-                        fig = plt.figure(figsize=(8.27, 11.69))
-                        ax = fig.add_axes([0, 0, 1, 1])
-                        ax.axis('off')
-                        header_top2 = 1.0 - cfg.top_margin
-                        header_height2 = cfg.header_height * cfg.small_header_factor
-                        header_bottom2 = header_top2 - header_height2
-                        ax.add_patch(
-                            plt.Rectangle((0, header_bottom2), 1, header_height2, color=self._GREEN_DARK,
-                                          transform=ax.transAxes)
-                        )
-                        if small_lines_wrapped:
-                            # Dynamically distribute wrapped small lines within the reserved portion
-                            start_frac_small = cfg.small_lines_start
-                            reserved_frac_small = cfg.small_lines_reserved
-                            n = len(small_lines_wrapped)
-                            if n > 0:
-                                spacing_frac = reserved_frac_small / n
-                                for i, line in enumerate(small_lines_wrapped):
-                                    y = header_top2 - (start_frac_small + i * spacing_frac) * header_height2
-                                    ax.text(cfg.content_margin, y, line, fontsize=7.5, color=self._SMALL_TEXT,
-                                            ha='left', va='top', transform=ax.transAxes)
-                        ax.text(cfg.content_margin, header_top2 - cfg.org_line1_offset * header_height2, title_text,
-                                fontsize=34,
-                                color=self._ACCENT_YELLOW, fontweight='bold', ha='left', va='top',
-                                transform=ax.transAxes)
-                        # Place signature block on the extra page using configured offsets
-                        sig_y2 = header_bottom2 - cfg.body_gap - cfg.signature_offset
-                        ax.text(cfg.content_margin, sig_y2, 'Командир Добровольной Народной Дружины:', fontsize=13,
-                                color=self._BODY_TEXT, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
-                        ax.text(cfg.content_margin, sig_y2 - cfg.signature_line_gap, report.commander, fontsize=13,
-                                color=self._BODY_TEXT,
-                                ha='left', va='top', transform=ax.transAxes)
-                        pdf.savefig(fig)
-                        plt.close(fig)
-                        continue
-                pdf.savefig(fig)
-                plt.close(fig)
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Generate a PDF report for the volunteer militia.')
-    parser.add_argument('-i', '--input', required=True, help='Path to JSON file with variable report data.')
-    parser.add_argument('-C', '--constants', required=False, help='Path to JSON file with constant report fields.')
-    parser.add_argument('-l', '--logo', required=True, help='Path to logo PNG with transparent background.')
-    parser.add_argument('-o', '--output', default='report.pdf', help='Path to output PDF file.')
-    parser.add_argument('-c', '--config', help='Optional path to JSON configuration file.')
+    """Main entry point for the report generation script."""
+    parser = argparse.ArgumentParser(
+        description='Generate a PDF report for the volunteer militia.'
+    )
+    parser.add_argument(
+        '-i', '--input',
+        required=True,
+        help='Path to JSON file with variable report data.'
+    )
+    parser.add_argument(
+        '-C', '--constants',
+        required=False,
+        help='Path to JSON file with constant report fields.'
+    )
+    parser.add_argument(
+        '-l', '--logo',
+        required=True,
+        help='Path to logo PNG with transparent background.'
+    )
+    parser.add_argument(
+        '-o', '--output',
+        default='report.pdf',
+        help='Path to output PDF file.'
+    )
+    parser.add_argument(
+        '-c', '--config',
+        help='Optional path to JSON configuration file.'
+    )
     args = parser.parse_args()
 
+    # Load configuration
     cfg = ReportConfig.load(args.config) if args.config else None
+
     # Load constants if provided
     consts = {}
     if args.constants:
         with open(args.constants, 'r', encoding='utf-8') as f:
             consts = json.load(f)
+
+    # Load variable data
     with open(args.input, 'r', encoding='utf-8') as f:
         var_data = json.load(f)
+
     # Merge constants into variable data if keys are missing
-    for k, v in consts.items():
-        var_data.setdefault(k, v)
+    for key, value in consts.items():
+        var_data.setdefault(key, value)
+
+    # Parse and generate
     report_data = parse_report_data(var_data)
     generator = ReportGenerator(args.logo, config=cfg)
     generator.generate(report_data, args.output)
+
     print(f'Report saved to {args.output}')
 
 
