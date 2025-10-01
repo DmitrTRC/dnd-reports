@@ -125,6 +125,12 @@ class ReportConfig:
     # value is added to ``content_margin`` for each level of indentation.
     sub_indent: float = 0.02
 
+    # Background colour for the area behind the logo on the first page.  Use
+    # this to visually separate the logo from the rest of the header.  You
+    # can override this in a configuration file.  The default is a dark
+    # teal that contrasts with the main header colour.
+    logo_bg_colour: str = '#008080'
+
     @staticmethod
     def load(path: str) -> 'ReportConfig':
         """Load configuration overrides from a JSON file."""
@@ -207,6 +213,8 @@ class ReportGenerator:
         self._SUBHEADER_GREEN = colours['subheader_green']
         self._BODY_TEXT = colours['body_text']
         self._RED = colours['red']
+        # Logo background colour.  Use the value from the configuration if present.
+        self._LOGO_BG = self.cfg.logo_bg_colour
 
     def _wrap_small_lines(self, lines: List[str]) -> List[str]:
         """Wrap small header lines to avoid overflowing the header."""
@@ -269,9 +277,10 @@ class ReportGenerator:
                 header_top = 1.0 - cfg.top_margin
                 header_height = cfg.header_height if page_number == 1 else cfg.header_height * cfg.small_header_factor
                 header_bottom = header_top - header_height
-                # Draw header bar
+                # Draw header bar with a low z‑order so that logo panel and logo can be drawn above it
                 ax.add_patch(
-                    plt.Rectangle((0, header_bottom), 1, header_height, color=self._GREEN_DARK, transform=ax.transAxes)
+                    plt.Rectangle((0, header_bottom), 1, header_height, color=self._GREEN_DARK, transform=ax.transAxes,
+                                  zorder=0)
                 )
                 # Small lines within header
                 if small_lines_wrapped:
@@ -325,8 +334,22 @@ class ReportGenerator:
                     logo_h = logo_w / adjusted_aspect
                     logo_x = 1 - cfg.content_margin - logo_w
                     logo_y = header_bottom + (header_height - logo_h) / 2
-                    ax.imshow(self.logo, extent=(logo_x, logo_x + logo_w, logo_y, logo_y + logo_h),
-                              transform=ax.transAxes, zorder=1)
+                    # Draw a coloured panel behind the logo to separate it visually from the header.
+                    # The panel spans from the left edge of the logo area to the right edge of the page.
+                    panel_width = 1.0 - logo_x
+                    ax.add_patch(
+                        plt.Rectangle(
+                            (logo_x, header_bottom), panel_width, header_height,
+                            color=self._LOGO_BG, transform=ax.transAxes, zorder=1
+                        )
+                    )
+                    # Draw the logo itself on top of the coloured panel.  Use a higher z‑order so it sits above the panel.
+                    ax.imshow(
+                        self.logo,
+                        extent=(logo_x, logo_x + logo_w, logo_y, logo_y + logo_h),
+                        transform=ax.transAxes,
+                        zorder=2
+                    )
                     # Report title and section heading
                     body_top = header_bottom - cfg.body_gap
                     title_y = body_top
