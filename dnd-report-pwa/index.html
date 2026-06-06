@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0B4F37" />
+  <title>Отчёты ДНД</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/emblem.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/emblem.png" alt="" class="brand-logo" id="brandLogo" />
+      <div class="brand-text">
+        <div class="brand-title">Отчёты ДНД</div>
+        <div class="brand-sub" id="brandSub">Добровольная Народная Дружина</div>
+      </div>
+    </div>
+
+    <div class="profile-switch">
+      <select id="profileSelect" title="Текущий отряд" aria-label="Текущий отряд"></select>
+      <button class="btn ghost" id="btnSettings" title="Окружение отряда">⚙ Настроить</button>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="btn ghost" id="btnNew" title="Новый отчёт">＋ Отчёт</button>
+      <button class="btn ghost" id="btnImport" title="Импорт месячного JSON">⭳ Импорт</button>
+      <button class="btn ghost" id="btnExport" title="Экспорт месячного JSON">⭱ JSON</button>
+      <button class="btn primary" id="btnPdf" title="Скачать PDF">⬇ PDF</button>
+      <button class="btn icon" id="btnTheme" title="Тема приложения" aria-label="Переключить тему">◑</button>
+    </div>
+    <input type="file" id="fileImport" accept="application/json,.json" hidden />
+  </header>
+
+  <main class="layout">
+    <!-- ЛЕВО: редактор отчёта -->
+    <section class="editor" id="editor">
+      <div class="card">
+        <div class="card-head"><span class="card-title">Период</span></div>
+        <div class="card-body row">
+          <label class="field grow"><span>Месяц</span>
+            <select id="fMonth"></select></label>
+          <label class="field"><span>Год</span>
+            <input type="number" id="fYear" min="2000" max="2100" step="1" /></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Мероприятия</span>
+          <button class="btn small ghost" id="btnTemplate" title="Заполнить по образцу прошлого месяца" hidden>📋 По образцу</button>
+          <button class="btn small ghost" id="btnReset" title="Очистить форму нового отчёта">↺ Сбросить</button>
+          <button class="btn small primary" id="btnAddAct">＋ Пункт</button>
+        </div>
+        <div class="card-body">
+          <ol class="acts" id="acts"></ol>
+          <p class="muted small" id="actsEmpty" hidden>Пунктов пока нет — добавьте первый.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ПРАВО: превью + история -->
+    <aside class="side">
+      <div class="card preview-card">
+        <div class="card-head">
+          <span class="card-title">Превью</span>
+          <div class="pager" id="pager"></div>
+        </div>
+        <div class="preview-wrap">
+          <div class="preview" id="preview"></div>
+        </div>
+        <div class="preview-actions">
+          <button class="btn primary block" id="btnPdf2">⬇ Скачать PDF</button>
+          <div class="send-row">
+            <select id="sendTo" class="send-to" title="Кому отправить" aria-label="Адресат"></select>
+            <button class="btn ghost" id="btnSend" title="Отправить отчёт">✉ Отправить</button>
+          </div>
+          <button class="btn ghost block" id="btnSave">💾 Сохранить в историю</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">История отряда</span>
+          <button class="btn small ghost" id="btnSeedHistory" title="Импортировать архив отчётов старого проекта">⭳ Архив</button>
+        </div>
+        <div class="card-body">
+          <ul class="history" id="history"></ul>
+          <p class="muted small" id="historyEmpty">Сохранённых отчётов пока нет.</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ВЫЕЗЖАЮЩАЯ ПАНЕЛЬ: ОКРУЖЕНИЕ ОТРЯДА -->
+  <div class="drawer-overlay" id="drawerOverlay" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-label="Окружение отряда">
+    <div class="drawer-head">
+      <div class="card-title">Окружение отряда</div>
+      <button class="btn icon" id="btnCloseDrawer" aria-label="Закрыть">✕</button>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="squad">Отряд</button>
+      <button class="tab" data-tab="colors">Цвета</button>
+      <button class="tab" data-tab="texts">Тексты</button>
+      <button class="tab" data-tab="email">Почта</button>
+      <button class="tab" data-tab="profile">Профиль</button>
+    </nav>
+    <div class="drawer-body">
+      <!-- Отряд -->
+      <section class="tabpane active" data-pane="squad">
+        <label class="field"><span>Короткое имя отряда (для переключателя)</span>
+          <input type="text" id="sName" placeholder="Лукоморье" /></label>
+        <label class="field"><span>Организация</span>
+          <input type="text" id="sOrg" placeholder="ПРАВОПОРЯДОК ЛУКОМОРЬЯ" /></label>
+        <label class="field"><span>Муниципалитет / станция</span>
+          <input type="text" id="sStation" placeholder="МО Колтушское городское поселение" /></label>
+        <label class="field"><span>Название дружины</span>
+          <input type="text" id="sTeam" placeholder="Добровольная Народная Дружина" /></label>
+        <label class="field"><span>Командир</span>
+          <input type="text" id="sCommander" placeholder="Морозов Дмитрий Вадимович" /></label>
+        <label class="field"><span>Строки шапки (мелкий шрифт), по одной на строку</span>
+          <textarea id="sSmall" rows="3" placeholder="Свидетельство…&#10;Адрес…"></textarea></label>
+        <div class="field">
+          <span>Эмблема (PNG с прозрачным фоном)</span>
+          <div class="logo-row">
+            <img id="sLogoPreview" class="logo-preview" alt="эмблема" />
+            <div class="logo-btns">
+              <button class="btn ghost" id="btnLogo">Выбрать файл…</button>
+              <button class="btn ghost danger" id="btnLogoReset" title="Эмблема Лукоморья по умолчанию">Сбросить</button>
+            </div>
+          </div>
+          <input type="file" id="fileLogo" accept="image/png,image/jpeg" hidden />
+        </div>
+        <label class="field color-field"><span>Фон под эмблемой</span>
+          <input type="color" id="sLogoBg" /></label>
+      </section>
+
+      <!-- Цвета -->
+      <section class="tabpane" data-pane="colors">
+        <label class="field"><span>Стиль бланка</span>
+          <select id="sStyle">
+            <option value="modern">Модерн — свежий, с таймлайном и сводкой</option>
+            <option value="classic">Классический — как в исходном проекте</option>
+          </select></label>
+        <p class="muted small">Палитра бланка. Превью справа обновляется сразу.</p>
+        <div class="color-grid" id="colorGrid"></div>
+        <button class="btn ghost danger" id="btnColorsReset">Вернуть стандартные цвета</button>
+      </section>
+
+      <!-- Тексты -->
+      <section class="tabpane" data-pane="texts">
+        <p class="muted small">Доступны подстановки <code>{month}</code> и <code>{year}</code>.</p>
+        <label class="field"><span>Заголовок отчёта</span>
+          <input type="text" id="tTitle" placeholder="Отчёт за {month} {year}" /></label>
+        <label class="field"><span>Подзаголовок (красный)</span>
+          <input type="text" id="tHeading" placeholder="За {month} {year} проведено:" /></label>
+        <label class="field"><span>Подпись (должность командира)</span>
+          <input type="text" id="tSign" placeholder="Командир Добровольной Народной Дружины:" /></label>
+        <button class="btn ghost danger" id="btnTextsReset">Вернуть стандартные тексты</button>
+      </section>
+
+      <!-- Почта -->
+      <section class="tabpane" data-pane="email">
+        <label class="field"><span>Почта отправителя</span>
+          <input type="email" id="eSender" placeholder="dnd.lukomorie@mail.ru" /></label>
+        <div class="field">
+          <span>Закрытый список адресатов (МВД)</span>
+          <ul class="recips" id="recips"></ul>
+          <button class="btn small ghost" id="btnAddRecip">＋ Адрес</button>
+        </div>
+        <p class="muted small">При отправке адресат выбирается только из этого списка. Тема и текст письма формируются автоматически.</p>
+        <hr class="sep" />
+        <label class="field"><span>URL сервера отправки (для отправки в один клик)</span>
+          <input type="text" id="eEndpoint" placeholder="оставьте пустым — берётся текущий адрес" /></label>
+        <p class="muted small" id="serverStatus">Сервер отправки: проверяю…</p>
+      </section>
+
+      <!-- Профиль -->
+      <section class="tabpane" data-pane="profile">
+        <p class="muted small">Профиль отряда — это всё окружение: данные, эмблема, цвета, тексты, почта. Им можно поделиться с другим отрядом.</p>
+        <div class="btn-col">
+          <button class="btn ghost" id="btnProfExport">⭱ Экспорт профиля (файл)</button>
+          <button class="btn ghost" id="btnProfImport">⭳ Импорт профиля из файла</button>
+          <button class="btn ghost" id="btnProfDup">⧉ Дублировать отряд</button>
+          <button class="btn ghost danger" id="btnProfDelete">🗑 Удалить этот отряд</button>
+        </div>
+        <input type="file" id="fileProfile" accept="application/json,.json" hidden />
+        <hr class="sep" />
+        <p class="muted small">Отчёты ДНД · версия 1.0.0 · офлайн-PWA<br /><a href="https://github.com/DmitrTRC/dnd-reports" target="_blank" rel="noopener">github.com/DmitrTRC/dnd-reports</a></p>
+      </section>
+    </div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- шаблоны -->
+  <template id="tplAct">
+    <li class="act">
+      <div class="act-head">
+        <span class="act-num"></span>
+        <div class="act-tools">
+          <button class="ic up" title="Выше">▲</button>
+          <button class="ic down" title="Ниже">▼</button>
+          <button class="ic del danger" title="Удалить пункт">✕</button>
+        </div>
+      </div>
+      <textarea class="act-text" rows="2" placeholder="Текст мероприятия"></textarea>
+      <ul class="subs"></ul>
+      <button class="btn small ghost add-sub">＋ Подпункт</button>
+    </li>
+  </template>
+
+  <template id="tplSub">
+    <li class="sub">
+      <textarea class="sub-text" rows="1" placeholder="Подпункт"></textarea>
+      <div class="sub-tools">
+        <button class="ic up" title="Выше">▲</button>
+        <button class="ic down" title="Ниже">▼</button>
+        <button class="ic del danger" title="Удалить">✕</button>
+      </div>
+    </li>
+  </template>
+
+  <template id="tplRecip">
+    <li class="recip">
+      <input type="text" class="r-label" placeholder="ОМВД по району" />
+      <input type="email" class="r-email" placeholder="omvd@mvd.gov.ru" />
+      <button class="ic del danger" title="Удалить">✕</button>
+    </li>
+  </template>
+
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script src="vendor/fontkit.umd.min.js"></script>
+  <script src="js/report-pdf.js"></script>
+  <script src="js/layout-modern.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/preview.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

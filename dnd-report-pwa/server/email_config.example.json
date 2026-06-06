@@ -1,0 +1,16 @@
+{
+  "_comment": "Скопируйте в email_config.json и впишите доступ к ящику-отправителю. Для Gmail включите 2FA и создайте ПАРОЛЬ ПРИЛОЖЕНИЯ (https://myaccount.google.com/apppasswords) — основной пароль не подойдёт. Адресат по умолчанию: baev-gmto@yandex.ru.",
+
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 465,
+  "smtp_ssl": true,
+  "smtp_starttls": false,
+
+  "smtp_user": "9984398@gmail.com",
+  "smtp_password": "ВПИШИТЕ_ПАРОЛЬ_ПРИЛОЖЕНИЯ_GMAIL",
+
+  "from_addr": "9984398@gmail.com",
+  "from_name": "ДНД Лукоморье",
+
+  "allowed_recipients": []
+}

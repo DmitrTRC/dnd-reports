@@ -1,0 +1,15 @@
+{
+  "_comment": "Архив отчётов старого проекта — импортируется в историю отряда Лукоморье при первом запуске и по кнопке «Архив».",
+  "files": [
+    "august_report_large.json",
+    "september_report_large.json",
+    "octpber_report.json",
+    "november_report.json",
+    "december_report.json",
+    "Lukomorie_January_2026__report.json",
+    "Lukomorie_Feb_2026__report.json",
+    "Lukomorie_JMarch_2026__report.json",
+    "Lukomorie_April_2026__report.json",
+    "Lukomorie_May_2026__report.json"
+  ]
+}
